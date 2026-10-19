@@ -1,0 +1,176 @@
+import 'package:drift/drift.dart' show Variable;
+
+import '../../../core/database/app_database.dart';
+
+class QuarterlyFinancialReport {
+  const QuarterlyFinancialReport({
+    required this.year,
+    required this.quarter,
+    required this.salesCents,
+    required this.materialCostsCents,
+    required this.operatingExpensesCents,
+    required this.otherIncomeCents,
+    required this.otherExpensesCents,
+    required this.unvaluedSales,
+  });
+
+  final int year;
+  final int quarter;
+
+  final int salesCents;
+  final int materialCostsCents;
+  final int operatingExpensesCents;
+  final int otherIncomeCents;
+  final int otherExpensesCents;
+  final int unvaluedSales;
+
+  int get netResultCents =>
+      salesCents +
+      otherIncomeCents -
+      materialCostsCents -
+      operatingExpensesCents -
+      otherExpensesCents;
+
+  int get distributableBaseCents => netResultCents > 0 ? netResultCents : 0;
+
+  // Centavos enteros, sin descuadrar el reparto.
+  int get reinvestmentCents => distributableBaseCents ~/ 2;
+
+  int get partnersCents => distributableBaseCents - reinvestmentCents;
+
+  int get paulCents => partnersCents * 35 ~/ 100;
+
+  int get joelCents => partnersCents - paulCents;
+
+  bool get hasValuationWarnings => unvaluedSales > 0;
+}
+
+class QuarterlyReportRepository {
+  QuarterlyReportRepository(this.db);
+
+  final AppDatabase db;
+
+  Future<bool> _tableExists(String name) async {
+    final rows = await db
+        .customSelect(
+          '''
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = ?
+      ''',
+          variables: [Variable.withString(name)],
+        )
+        .get();
+
+    return rows.isNotEmpty;
+  }
+
+  Future<QuarterlyFinancialReport> getReport({
+    required int year,
+    required int quarter,
+  }) async {
+    if (quarter < 1 || quarter > 4) {
+      throw ArgumentError('Trimestre no valido.');
+    }
+
+    final start = DateTime(year, (quarter - 1) * 3 + 1);
+    final end = DateTime(year, quarter * 3 + 1);
+
+    final startSeconds = start.millisecondsSinceEpoch ~/ 1000;
+    final endSeconds = end.millisecondsSinceEpoch ~/ 1000;
+
+    // El periodo corresponde a la hora local de Quito
+    // cuando Windows esta configurado en esa zona horaria.
+    final rows = await db
+        .customSelect(
+          '''
+      SELECT
+        a.code,
+        COALESCE(SUM(jl.debit_cents), 0) AS debits,
+        COALESCE(SUM(jl.credit_cents), 0) AS credits
+      FROM journal_lines jl
+      JOIN financial_accounts a ON a.id = jl.account_id
+      JOIN journal_entries je ON je.id = jl.entry_id
+      WHERE je.occurred_at >= ?
+        AND je.occurred_at < ?
+        AND (a.code LIKE '4%' OR a.code LIKE '5%')
+      GROUP BY a.code
+      ''',
+          variables: [
+            Variable.withInt(startSeconds),
+            Variable.withInt(endSeconds),
+          ],
+        )
+        .get();
+
+    var sales = 0;
+    var cost = 0;
+    var operating = 0;
+    var otherIncome = 0;
+    var otherExpenses = 0;
+
+    for (final row in rows) {
+      final code = row.read<String>('code');
+      final debits = row.read<int>('debits');
+      final credits = row.read<int>('credits');
+
+      if (code == '4100') {
+        sales += credits - debits;
+      } else if (code == '5105') {
+        cost += debits - credits;
+      } else if (code == '5100') {
+        operating += debits - credits;
+      } else if (code.startsWith('4')) {
+        otherIncome += credits - debits;
+      } else if (code.startsWith('5')) {
+        otherExpenses += debits - credits;
+      }
+    }
+
+    var unvalued = 0;
+
+    if (await _tableExists('izumi_sales')) {
+      final startMillis = start.millisecondsSinceEpoch;
+      final endMillis = end.millisecondsSinceEpoch;
+      final hasLinks = await _tableExists('finished_stock_sales');
+      final hasCostEntries = await _tableExists('journal_entries');
+
+      if (hasLinks && hasCostEntries) {
+        // Ventas de macetas terminadas que todavia no
+        // tienen un movimiento contable de costo de ventas.
+        final warning = await db
+            .customSelect(
+              '''
+          SELECT COUNT(*) AS total
+          FROM finished_stock_sales fs
+          JOIN izumi_sales s ON s.id = fs.sale_id
+          WHERE s.occurred_at >= ?
+            AND s.occurred_at < ?
+            AND NOT EXISTS (
+              SELECT 1
+              FROM journal_entries je
+              WHERE je.reference = 'COSTO-VENTA-' || s.id
+            )
+          ''',
+              variables: [
+                Variable.withInt(startMillis),
+                Variable.withInt(endMillis),
+              ],
+            )
+            .getSingle();
+
+        unvalued = warning.read<int>('total');
+      }
+    }
+
+    return QuarterlyFinancialReport(
+      year: year,
+      quarter: quarter,
+      salesCents: sales,
+      materialCostsCents: cost,
+      operatingExpensesCents: operating,
+      otherIncomeCents: otherIncome,
+      otherExpensesCents: otherExpenses,
+      unvaluedSales: unvalued,
+    );
+  }
+}

@@ -1,0 +1,153 @@
+import 'package:drift/drift.dart' show Variable;
+import 'package:flutter/material.dart';
+
+import '../../../../core/database/app_database.dart';
+
+class ProductionDetailDialog extends StatefulWidget {
+  const ProductionDetailDialog({super.key, required this.productionId});
+
+  final int productionId;
+
+  @override
+  State<ProductionDetailDialog> createState() => _ProductionDetailDialogState();
+}
+
+class _ProductionDetailDialogState extends State<ProductionDetailDialog> {
+  late final AppDatabase db;
+  late final Future<List<_ConsumptionRow>> rows;
+
+  @override
+  void initState() {
+    super.initState();
+    db = AppDatabase();
+    rows = load();
+  }
+
+  @override
+  void dispose() {
+    db.close();
+    super.dispose();
+  }
+
+  Future<List<_ConsumptionRow>> load() async {
+    final result = await db
+        .customSelect(
+          '''
+      SELECT
+        pc.inventory_item_id,
+        COALESCE(i.name, 'Material #' || pc.inventory_item_id)
+          AS material_name,
+        COALESCE(i.unit, '') AS unit,
+        pc.quantity_millis,
+        pc.waste_percent,
+        pc.consumed_millis
+      FROM production_consumption pc
+      LEFT JOIN inventory_items i
+        ON i.id = pc.inventory_item_id
+      WHERE pc.production_id = ?
+      ORDER BY pc.id
+    ''',
+          variables: [Variable.withInt(widget.productionId)],
+        )
+        .get();
+
+    return result
+        .map(
+          (row) => _ConsumptionRow(
+            name: row.read<String>('material_name'),
+            unit: row.read<String>('unit'),
+            quantityMillis: row.read<int>('quantity_millis'),
+            wastePercent: row.read<int>('waste_percent'),
+            consumedMillis: row.read<int>('consumed_millis'),
+          ),
+        )
+        .toList();
+  }
+
+  String formatQuantity(int millis) {
+    return (millis / 1000)
+        .toStringAsFixed(3)
+        .replaceFirst(RegExp(r'0+$'), '')
+        .replaceFirst(RegExp(r'\.$'), '');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Producci\u00f3n #${widget.productionId}'),
+      content: SizedBox(
+        width: 560,
+        height: 360,
+        child: FutureBuilder<List<_ConsumptionRow>>(
+          future: rows,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return SelectableText(
+                'No se pudo cargar el detalle:\n${snapshot.error}',
+              );
+            }
+
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final data = snapshot.data!;
+
+            if (data.isEmpty) {
+              return const Center(
+                child: Text('No se encontraron materiales registrados.'),
+              );
+            }
+
+            return ListView.separated(
+              itemCount: data.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final item = data[index];
+
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(
+                    Icons.inventory_2_outlined,
+                    color: Color(0xFF284426),
+                  ),
+                  title: Text(item.name),
+                  subtitle: Text(
+                    'Cantidad: ${formatQuantity(item.quantityMillis)} '
+                    '${item.unit}\n'
+                    'Desperdicio: ${item.wastePercent}%\n'
+                    'Consumo total: '
+                    '${formatQuantity(item.consumedMillis)} ${item.unit}',
+                  ),
+                  isThreeLine: true,
+                );
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cerrar'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ConsumptionRow {
+  const _ConsumptionRow({
+    required this.name,
+    required this.unit,
+    required this.quantityMillis,
+    required this.wastePercent,
+    required this.consumedMillis,
+  });
+
+  final String name;
+  final String unit;
+  final int quantityMillis;
+  final int wastePercent;
+  final int consumedMillis;
+}

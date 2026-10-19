@@ -1,0 +1,168 @@
+import 'package:flutter/material.dart';
+
+import '../../../core/database/app_database.dart';
+import '../data/products_repository.dart';
+import '../domain/izumi_product.dart';
+import 'widgets/product_card.dart';
+import 'widgets/product_dialog.dart';
+
+class ProductosPage extends StatefulWidget {
+  const ProductosPage({super.key});
+
+  @override
+  State<ProductosPage> createState() => _ProductosPageState();
+}
+
+class _ProductosPageState extends State<ProductosPage> {
+  late final AppDatabase database;
+  late final ProductsRepository repository;
+  late Future<List<IzumiProduct>> products;
+
+  bool showInactive = false;
+
+  @override
+  void initState() {
+    super.initState();
+    database = AppDatabase();
+    repository = ProductsRepository(database);
+    products = repository.getAll();
+  }
+
+  @override
+  void dispose() {
+    database.close();
+    super.dispose();
+  }
+
+  void refresh() {
+    setState(() => products = repository.getAll());
+  }
+
+  void showError(Object error) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(error.toString())));
+  }
+
+  Future<void> saveProduct([IzumiProduct? product]) async {
+    final draft = await showDialog<ProductDraft>(
+      context: context,
+      builder: (_) => ProductDialog(product: product),
+    );
+
+    if (draft == null || !mounted) return;
+
+    try {
+      if (product == null) {
+        await repository.create(draft);
+      } else {
+        await repository.update(product.id, draft);
+      }
+
+      if (mounted) refresh();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  Future<void> toggleProduct(IzumiProduct product) async {
+    try {
+      await repository.setActive(product.id, !product.active);
+
+      if (mounted) refresh();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<IzumiProduct>>(
+      future: products,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: SelectableText('Error: ${snapshot.error}'));
+        }
+
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final all = snapshot.data!;
+        final visible = showInactive
+            ? all
+            : all.where((item) => item.active).toList();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Productos',
+                    style: TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF284426),
+                    ),
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: () => saveProduct(),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Nuevo producto'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text('Cat\u00e1logo de dise\u00f1os y macetas de Izumi.'),
+            const SizedBox(height: 12),
+            CheckboxListTile(
+              value: showInactive,
+              onChanged: (value) {
+                setState(() => showInactive = value ?? false);
+              },
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('Mostrar productos inactivos'),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: visible.isEmpty
+                  ? const Center(child: Text('No hay productos para mostrar.'))
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        final columns = (constraints.maxWidth / 240)
+                            .floor()
+                            .clamp(1, 5);
+
+                        return GridView.builder(
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: columns,
+                                mainAxisSpacing: 12,
+                                crossAxisSpacing: 12,
+                                mainAxisExtent: 320,
+                              ),
+                          itemCount: visible.length,
+                          itemBuilder: (context, index) {
+                            final product = visible[index];
+
+                            return ProductCard(
+                              product: product,
+                              onEdit: () => saveProduct(product),
+                              onToggle: () => toggleProduct(product),
+                            );
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}

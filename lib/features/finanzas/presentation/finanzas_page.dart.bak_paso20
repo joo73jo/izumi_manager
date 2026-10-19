@@ -1,0 +1,280 @@
+import 'widgets/financial_operation_dialog.dart';
+import '../data/financial_operations_repository.dart';
+
+import 'package:flutter/material.dart';
+
+import '../../../core/database/app_database.dart';
+import '../data/financial_repository.dart';
+import '../domain/financial_summary.dart';
+import 'widgets/financial_metric_card.dart';
+import 'widgets/pending_contribution_banner.dart';
+
+class FinanzasPage extends StatefulWidget {
+  const FinanzasPage({super.key});
+
+  @override
+  State<FinanzasPage> createState() => _FinanzasPageState();
+}
+
+class _FinanzasPageState extends State<FinanzasPage> {
+  late final AppDatabase database;
+  late final FinancialRepository repository;
+  late Future<FinancialSummary> summary;
+
+  bool saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    database = AppDatabase();
+    repository = FinancialRepository(database);
+
+    summary = repository.initialize().then((_) => repository.loadSummary());
+  }
+
+  @override
+  void dispose() {
+    database.close();
+    super.dispose();
+  }
+
+  String money(int cents) {
+    final value = cents.abs();
+    final integer = value ~/ 100;
+    final decimal = (value % 100).toString().padLeft(2, '0');
+    final sign = cents < 0 ? '-' : '';
+
+    return '$sign\$$integer.$decimal';
+  }
+
+  void refresh() {
+    setState(() {
+      summary = repository.loadSummary();
+    });
+  }
+
+  Future<void> registerContribution() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Registrar aporte inicial'),
+        content: const Text(
+          'Se registrarÃ¡n \$2.000 como capital aportado por Paul '
+          'y dinero recibido en el banco de Izumi. '
+          'Confirma solamente si el dinero ya fue recibido. '
+          'Los \$500 restantes no se registrarÃ¡n como efectivo.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Confirmar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+
+    setState(() => saving = true);
+
+    try {
+      await repository.registerPaulContribution();
+
+      if (!mounted) return;
+
+      refresh();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Aporte de Paul registrado correctamente.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Error: $error')));
+    } finally {
+      if (mounted) {
+        setState(() => saving = false);
+      }
+    }
+  }
+
+  Future<void> addFinancialOperation() async {
+    final input = await showDialog<FinancialOperationInput>(
+      context: context,
+      builder: (_) => const FinancialOperationDialog(),
+    );
+
+    if (input == null || !mounted) return;
+
+    try {
+      final operations = FinancialOperationsRepository(database);
+
+      await operations.register(
+        type: input.type,
+        description: input.description,
+        amountCents: input.amountCents,
+        details: input.details,
+      );
+
+      if (!mounted) return;
+
+      refresh();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Movimiento registrado correctamente.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('No se pudo registrar: $error')));
+    }
+  }
+
+  Widget buildMetricSection(FinancialSummary data) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 650;
+
+        final cards = [
+          FinancialMetricCard(
+            label: 'Saldo bancario contable',
+            value: money(data.bankCents),
+            icon: Icons.account_balance,
+          ),
+          FinancialMetricCard(
+            label: 'Capital aportado',
+            value: money(data.capitalCents),
+            icon: Icons.savings,
+          ),
+        ];
+
+        if (narrow) {
+          return Column(
+            children: [cards[0], const SizedBox(height: 16), cards[1]],
+          );
+        }
+
+        return Row(
+          children: [
+            Expanded(child: cards[0]),
+            const SizedBox(width: 16),
+            Expanded(child: cards[1]),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget buildMovements(FinancialSummary data) {
+    if (data.movements.isEmpty) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(20),
+          child: Text('No existen movimientos registrados.'),
+        ),
+      );
+    }
+
+    return Card(
+      child: Column(
+        children: data.movements.map((movement) {
+          final date = movement.date;
+          final formatted = '${date.day}/${date.month}/${date.year}';
+
+          return ListTile(
+            leading: const Icon(Icons.receipt_long),
+            title: Text(movement.description),
+            subtitle: Text(formatted),
+            trailing: Text(
+              money(movement.bankChangeCents),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<FinancialSummary>(
+      future: summary,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: SelectableText('Error: ${snapshot.error}'));
+        }
+
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final data = snapshot.data!;
+
+        return ListView(
+          children: [
+            const Text(
+              'Finanzas',
+              style: TextStyle(
+                fontSize: 30,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF284426),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text('Administracion financiera de Izumi'),
+            const SizedBox(height: 24),
+
+            buildMetricSection(data),
+
+            if (!data.contributionRegistered) ...[
+              const SizedBox(height: 16),
+              PendingContributionBanner(
+                saving: saving,
+                onRegister: registerContribution,
+              ),
+            ],
+
+            const SizedBox(height: 28),
+
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Movimientos bancarios',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: addFinancialOperation,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Nuevo movimiento'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            buildMovements(data),
+
+            const SizedBox(height: 16),
+
+            const Text(
+              'Los saldos se calculan a partir de los movimientos contables '
+              'almacenados localmente. Todavia no se ha realizado una '
+              'conciliacion bancaria.',
+              style: TextStyle(color: Colors.black54),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}

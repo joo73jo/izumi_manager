@@ -1,0 +1,249 @@
+import 'package:flutter/material.dart';
+
+import '../../../core/database/app_database.dart';
+import '../data/tasks_repository.dart';
+
+class TareasPage extends StatefulWidget {
+  const TareasPage({super.key});
+
+  @override
+  State<TareasPage> createState() => _TareasPageState();
+}
+
+class _TareasPageState extends State<TareasPage> {
+  late final AppDatabase db;
+  late final TasksRepository repository;
+  late Future<List<IzumiTask>> tasks;
+  bool completedView = false;
+
+  @override
+  void initState() {
+    super.initState();
+    db = AppDatabase();
+    repository = TasksRepository(db);
+    refresh();
+  }
+
+  void refresh() {
+    final updatedTasks = repository.all();
+    setState(() {
+      tasks = updatedTasks;
+    });
+  }
+
+  @override
+  void dispose() {
+    db.close();
+    super.dispose();
+  }
+
+  Future<void> edit([IzumiTask? task]) async {
+    final controller = TextEditingController(text: task?.title ?? '');
+    var priority = task?.priority ?? 2;
+
+    final result = await showDialog<(String, int)>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: Text(task == null ? 'Nueva tarea' : 'Editar tarea'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Tarea',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<int>(
+                  initialValue: priority,
+                  decoration: const InputDecoration(
+                    labelText: 'Prioridad',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 1, child: Text('Alta')),
+                    DropdownMenuItem(value: 2, child: Text('Media')),
+                    DropdownMenuItem(value: 3, child: Text('Baja')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) update(() => priority = v);
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (controller.text.trim().isEmpty) return;
+                Navigator.pop(dialogContext, (
+                  controller.text.trim(),
+                  priority,
+                ));
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    controller.dispose();
+    if (result == null || !mounted) return;
+
+    try {
+      await repository.save(result.$1, result.$2, id: task?.id);
+      if (mounted) refresh();
+    } catch (e) {
+      showError(e);
+    }
+  }
+
+  void showError(Object e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+  }
+
+  Future<void> toggle(IzumiTask task) async {
+    try {
+      await repository.toggle(task);
+      if (mounted) refresh();
+    } catch (e) {
+      showError(e);
+    }
+  }
+
+  Future<void> remove(IzumiTask task) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Eliminar tarea'),
+        content: Text('Eliminar "${task.title}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await repository.delete(task.id);
+      if (mounted) refresh();
+    } catch (e) {
+      showError(e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Tareas de Izumi',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: () => edit(),
+              icon: const Icon(Icons.add),
+              label: const Text('Nueva tarea'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        SegmentedButton<bool>(
+          segments: const [
+            ButtonSegment(value: false, label: Text('Pendientes')),
+            ButtonSegment(value: true, label: Text('Completadas')),
+          ],
+          selected: {completedView},
+          onSelectionChanged: (v) => setState(() => completedView = v.first),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: FutureBuilder<List<IzumiTask>>(
+            future: tasks,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return SelectableText('Error: ${snapshot.error}');
+              }
+              if (!snapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              final filtered = snapshot.data!
+                  .where((t) => t.done == completedView)
+                  .toList();
+
+              if (filtered.isEmpty) {
+                return const Center(
+                  child: Text('No hay tareas en esta vista.'),
+                );
+              }
+
+              return ListView.builder(
+                itemCount: filtered.length,
+                itemBuilder: (context, index) {
+                  final task = filtered[index];
+                  return Card(
+                    child: ListTile(
+                      leading: Checkbox(
+                        value: task.done,
+                        onChanged: (_) => toggle(task),
+                      ),
+                      title: Text(
+                        task.title,
+                        style: TextStyle(
+                          decoration: task.done
+                              ? TextDecoration.lineThrough
+                              : null,
+                        ),
+                      ),
+                      subtitle: Text(
+                        ['Alta', 'Media', 'Baja'][task.priority - 1],
+                      ),
+                      trailing: Wrap(
+                        children: [
+                          IconButton(
+                            tooltip: 'Editar',
+                            icon: const Icon(Icons.edit_outlined),
+                            onPressed: () => edit(task),
+                          ),
+                          IconButton(
+                            tooltip: 'Eliminar',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () => remove(task),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}

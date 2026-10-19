@@ -1,0 +1,229 @@
+import 'package:drift/drift.dart';
+
+import '../../../core/database/app_database.dart';
+import '../domain/purchase_line.dart';
+
+class PurchaseRepository {
+  PurchaseRepository(this.db);
+
+  final AppDatabase db;
+
+  Future<void> initialize() async {
+    await db.customStatement('''
+      CREATE TABLE IF NOT EXISTS purchase_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        journal_entry_id INTEGER NOT NULL UNIQUE
+          REFERENCES journal_entries(id),
+        description TEXT NOT NULL,
+        occurred_at INTEGER NOT NULL,
+        total_cents INTEGER NOT NULL CHECK(total_cents > 0)
+      )
+    ''');
+
+    await db.customStatement('''
+      CREATE TABLE IF NOT EXISTS purchase_batch_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        purchase_id INTEGER NOT NULL
+          REFERENCES purchase_batches(id),
+        item_id INTEGER NOT NULL
+          REFERENCES inventory_items(id),
+        quantity_millis INTEGER NOT NULL
+          CHECK(quantity_millis > 0),
+        total_cents INTEGER NOT NULL
+          CHECK(total_cents > 0)
+      )
+    ''');
+  }
+
+  Future<void> _ensurePurchaseMetadata() async {
+    await db.customStatement('''
+      CREATE TABLE IF NOT EXISTS purchase_metadata (
+        purchase_id INTEGER PRIMARY KEY
+          REFERENCES purchase_batches(id),
+        supplier TEXT NOT NULL DEFAULT '',
+        invoice_number TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT ''
+      )
+    ''');
+  }
+
+  Future<int> _account(String code) async {
+    final row = await db
+        .customSelect(
+          'SELECT id FROM financial_accounts WHERE code = ?',
+          variables: [Variable.withString(code)],
+        )
+        .getSingle();
+
+    return row.read<int>('id');
+  }
+
+  Future<int> _lastId() async {
+    final row = await db
+        .customSelect('SELECT last_insert_rowid() AS id')
+        .getSingle();
+
+    return row.read<int>('id');
+  }
+
+  Future<void> register(PurchaseDraft draft) async {
+    if (draft.lines.isEmpty || draft.totalCents <= 0) {
+      throw ArgumentError('La compra debe contener materiales.');
+    }
+
+    if (draft.description.trim().isEmpty) {
+      throw ArgumentError('La descripci\u00f3n es obligatoria.');
+    }
+
+    for (final line in draft.lines) {
+      if (line.quantityMillis <= 0 ||
+          line.totalCents <= 0 ||
+          line.name.trim().isEmpty) {
+        throw ArgumentError('Existen materiales con datos inv\u00e1lidos.');
+      }
+    }
+
+    await db.transaction(() async {
+      await initialize();
+      await _ensurePurchaseMetadata();
+
+      await db.customStatement(
+        'INSERT OR IGNORE INTO financial_accounts '
+        '(code, name, type, active) VALUES (?, ?, ?, 1)',
+        ['1100', 'Banco Izumi', 'asset'],
+      );
+
+      await db.customStatement(
+        'INSERT OR IGNORE INTO financial_accounts '
+        '(code, name, type, active) VALUES (?, ?, ?, 1)',
+        ['1200', 'Inventario', 'asset'],
+      );
+
+      final bankId = await _account('1100');
+      final inventoryAccountId = await _account('1200');
+
+      final bankRow = await db
+          .customSelect(
+            '''
+        SELECT COALESCE(
+          SUM(debit_cents - credit_cents), 0
+        ) AS balance
+        FROM journal_lines
+        WHERE account_id = ?
+      ''',
+            variables: [Variable.withInt(bankId)],
+          )
+          .getSingle();
+
+      if (bankRow.read<int>('balance') < draft.totalCents) {
+        throw StateError('Saldo bancario contable insuficiente.');
+      }
+
+      final occurredAt =
+          DateTime(
+            draft.date.year,
+            draft.date.month,
+            draft.date.day,
+            12,
+          ).millisecondsSinceEpoch ~/
+          1000;
+
+      await db.customStatement(
+        'INSERT INTO journal_entries '
+        '(occurred_at, description, reference) VALUES (?, ?, ?)',
+        [occurredAt, 'Compra de materiales: ${draft.description.trim()}', null],
+      );
+
+      final entryId = await _lastId();
+
+      await db.customStatement(
+        'INSERT INTO journal_lines '
+        '(entry_id, account_id, debit_cents, credit_cents) '
+        'VALUES (?, ?, ?, 0)',
+        [entryId, inventoryAccountId, draft.totalCents],
+      );
+
+      await db.customStatement(
+        'INSERT INTO journal_lines '
+        '(entry_id, account_id, debit_cents, credit_cents) '
+        'VALUES (?, ?, 0, ?)',
+        [entryId, bankId, draft.totalCents],
+      );
+
+      await db.customStatement(
+        'INSERT INTO purchase_batches '
+        '(journal_entry_id, description, occurred_at, total_cents) '
+        'VALUES (?, ?, ?, ?)',
+        [entryId, draft.description.trim(), occurredAt, draft.totalCents],
+      );
+
+      final purchaseId = await _lastId();
+
+      await db.customStatement(
+        'INSERT INTO purchase_metadata '
+        '(purchase_id, supplier, invoice_number, notes) '
+        'VALUES (?, ?, ?, ?)',
+        [
+          purchaseId,
+          draft.supplier.trim(),
+          draft.invoiceNumber.trim(),
+          draft.notes.trim(),
+        ],
+      );
+
+      for (final line in draft.lines) {
+        int itemId;
+
+        if (line.isNew) {
+          await db.customStatement(
+            'INSERT INTO inventory_items '
+            '(name, category, unit, quantity_millis, minimum_millis) '
+            'VALUES (?, ?, ?, 0, 0)',
+            [line.name.trim(), line.category.name, line.unit],
+          );
+
+          itemId = await _lastId();
+        } else {
+          itemId = line.inventoryItemId!;
+
+          final existing = await db
+              .customSelect(
+                'SELECT id FROM inventory_items WHERE id = ?',
+                variables: [Variable.withInt(itemId)],
+              )
+              .get();
+
+          if (existing.isEmpty) {
+            throw StateError('Un material de la compra ya no existe.');
+          }
+        }
+
+        await db.customStatement(
+          'UPDATE inventory_items '
+          'SET quantity_millis = quantity_millis + ? '
+          'WHERE id = ?',
+          [line.quantityMillis, itemId],
+        );
+
+        await db.customStatement(
+          'INSERT INTO inventory_stock_movements '
+          '(item_id, quantity_delta_millis, reason, occurred_at) '
+          'VALUES (?, ?, ?, ?)',
+          [
+            itemId,
+            line.quantityMillis,
+            'Compra #$purchaseId',
+            DateTime.now().millisecondsSinceEpoch,
+          ],
+        );
+
+        await db.customStatement(
+          'INSERT INTO purchase_batch_lines '
+          '(purchase_id, item_id, quantity_millis, total_cents) '
+          'VALUES (?, ?, ?, ?)',
+          [purchaseId, itemId, line.quantityMillis, line.totalCents],
+        );
+      }
+    });
+  }
+}

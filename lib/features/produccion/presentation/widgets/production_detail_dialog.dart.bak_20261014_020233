@@ -1,0 +1,147 @@
+import 'package:flutter/material.dart';
+
+import '../../../../core/database/app_database.dart';
+import '../../data/production_cost_repository.dart';
+
+class ProductionDetailDialog extends StatefulWidget {
+  const ProductionDetailDialog({super.key, required this.productionId});
+
+  final int productionId;
+
+  @override
+  State<ProductionDetailDialog> createState() => _ProductionDetailDialogState();
+}
+
+class _ProductionDetailDialogState extends State<ProductionDetailDialog> {
+  late final AppDatabase db;
+  late final Future<ProductionCostReport> report;
+
+  @override
+  void initState() {
+    super.initState();
+    db = AppDatabase();
+    report = ProductionCostRepository(db).forProduction(widget.productionId);
+  }
+
+  @override
+  void dispose() {
+    db.close();
+    super.dispose();
+  }
+
+  String quantity(int millis) {
+    return (millis / 1000)
+        .toStringAsFixed(3)
+        .replaceFirst(RegExp(r'0+$'), '')
+        .replaceFirst(RegExp(r'\.$'), '');
+  }
+
+  String money(int cents) {
+    return '\$${(cents / 100).toStringAsFixed(2)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Producci\u00f3n #${widget.productionId}'),
+      content: SizedBox(
+        width: 590,
+        height: 440,
+        child: FutureBuilder<ProductionCostReport>(
+          future: report,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return SelectableText(
+                'No se pudo cargar el detalle:\n${snapshot.error}',
+              );
+            }
+
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final data = snapshot.data!;
+
+            if (data.materials.isEmpty) {
+              return const Center(
+                child: Text('No hay materiales registrados.'),
+              );
+            }
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: data.materials.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final material = data.materials[index];
+                      final cost = material.estimatedCostCents;
+
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(
+                          Icons.inventory_2_outlined,
+                          color: Color(0xFF284426),
+                        ),
+                        title: Text(material.name),
+                        subtitle: Text(
+                          'Cantidad: ${quantity(material.quantityMillis)} '
+                          '${material.unit}\n'
+                          'Desperdicio: ${material.wastePercent}%\n'
+                          'Consumo: ${quantity(material.consumedMillis)} '
+                          '${material.unit}',
+                        ),
+                        isThreeLine: true,
+                        trailing: SizedBox(
+                          width: 120,
+                          child: Text(
+                            cost == null ? 'Sin costo registrado' : money(cost),
+                            textAlign: TextAlign.end,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const Divider(),
+                Text(
+                  data.complete
+                      ? 'Costo estimado de materiales: '
+                            '${money(data.knownCostCents)}'
+                      : 'Costo parcial conocido: '
+                            '${money(data.knownCostCents)}',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                if (!data.complete)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      '${data.missingPrices} material(es) sin precio '
+                      'de compra registrado. El costo total '
+                      'todav\u00eda no se puede determinar.',
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Estimaci\u00f3n con precios promedio de compra. '
+                  'No incluye electricidad, mano de obra ni '
+                  'otros costos indirectos. No genera asientos contables.',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cerrar'),
+        ),
+      ],
+    );
+  }
+}

@@ -1,0 +1,17 @@
+import 'package:flutter/material.dart';
+
+import '../../../core/widgets/section_placeholder.dart';
+
+class CalculadoraPage extends StatelessWidget {
+  const CalculadoraPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const SectionPlaceholder(
+      title: 'Calculadora de costos',
+      description:
+          'Calcula el costo de fabricación y el margen de cada producto.',
+      icon: Icons.calculate_outlined,
+    );
+  }
+}

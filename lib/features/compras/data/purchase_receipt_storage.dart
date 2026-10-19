@@ -1,0 +1,65 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+class PurchaseReceiptStorage {
+  static const allowedExtensions = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
+
+  Future<String?> selectAndCopy(int purchaseId) async {
+    final selected = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: allowedExtensions,
+    );
+
+    if (selected == null) return null;
+
+    final sourcePath = selected.path;
+
+    if (sourcePath == null) {
+      throw StateError('No se pudo obtener el archivo.');
+    }
+
+    final source = File(sourcePath);
+    final extension = p.extension(source.path).toLowerCase();
+
+    if (!allowedExtensions.contains(extension.replaceFirst('.', ''))) {
+      throw StateError('Formato de comprobante no permitido.');
+    }
+
+    final directory = await getApplicationSupportDirectory();
+
+    final receipts = Directory(p.join(directory.path, 'Izumi', 'Comprobantes'));
+
+    await receipts.create(recursive: true);
+
+    final timestamp = DateTime.now().microsecondsSinceEpoch;
+
+    final destination = p.join(
+      receipts.path,
+      'compra_${purchaseId}_$timestamp$extension',
+    );
+
+    await source.copy(destination);
+
+    return destination;
+  }
+
+  Future<void> open(String path) async {
+    final file = File(path);
+
+    if (!await file.exists()) {
+      throw StateError('El comprobante ya no existe.');
+    }
+
+    final uri = Uri.file(path);
+
+    final success = await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+    if (!success) {
+      throw StateError('No se pudo abrir el comprobante.');
+    }
+  }
+}

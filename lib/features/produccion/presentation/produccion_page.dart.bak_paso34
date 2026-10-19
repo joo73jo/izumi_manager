@@ -1,0 +1,16 @@
+import 'package:flutter/material.dart';
+
+import '../../../core/widgets/section_placeholder.dart';
+
+class ProduccionPage extends StatelessWidget {
+  const ProduccionPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const SectionPlaceholder(
+      title: 'Producción',
+      description: 'Órdenes de impresión, consumos y productos terminados.',
+      icon: Icons.precision_manufacturing_outlined,
+    );
+  }
+}

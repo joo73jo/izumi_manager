@@ -1,0 +1,178 @@
+import 'package:flutter/material.dart';
+
+import '../../domain/inventory_item.dart';
+import 'inventory_item_card.dart';
+
+class InventoryCatalogView extends StatefulWidget {
+  const InventoryCatalogView({
+    super.key,
+    required this.items,
+    required this.onAdjust,
+    required this.onPurchase,
+    required this.onHistory,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final List<InventoryItem> items;
+  final void Function(InventoryItem) onAdjust;
+  final void Function(InventoryItem) onPurchase;
+  final void Function(InventoryItem) onHistory;
+  final void Function(InventoryItem) onEdit;
+  final void Function(InventoryItem) onDelete;
+
+  @override
+  State<InventoryCatalogView> createState() => _InventoryCatalogViewState();
+}
+
+class _InventoryCatalogViewState extends State<InventoryCatalogView> {
+  String selected = 'all';
+  String search = '';
+
+  static const green = Color(0xFF284426);
+
+  static const categories = [
+    ('all', 'Todos'),
+    ('filament', 'Filamentos'),
+    ('plant', 'Plantas'),
+    ('substrate', 'Sustratos'),
+    ('packaging', 'Packaging'),
+    ('other', 'Otros'),
+  ];
+
+  String categoryKey(InventoryItem item) {
+    final value = item.category.name.toLowerCase();
+
+    switch (value) {
+      case 'filament':
+      case 'filamento':
+        return 'filament';
+      case 'plant':
+      case 'planta':
+        return 'plant';
+      case 'substrate':
+      case 'sustrato':
+        return 'substrate';
+      case 'packaging':
+      case 'empaque':
+        return 'packaging';
+      default:
+        return 'other';
+    }
+  }
+
+  IconData categoryIcon(String category) {
+    switch (category) {
+      case 'filament':
+        return Icons.layers_outlined;
+      case 'plant':
+        return Icons.local_florist_outlined;
+      case 'substrate':
+        return Icons.grass_outlined;
+      case 'packaging':
+        return Icons.inventory_2_outlined;
+      default:
+        return Icons.category_outlined;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = search.trim().toLowerCase();
+
+    final filtered =
+        widget.items.where((item) {
+          final matchesCategory =
+              selected == 'all' || categoryKey(item) == selected;
+
+          final matchesSearch = item.name.toLowerCase().contains(query);
+
+          return matchesCategory && matchesSearch;
+        }).toList()..sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        );
+
+    final visibleCategories = selected == 'all'
+        ? categories.skip(1).toList()
+        : categories.where((c) => c.$1 == selected).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          decoration: InputDecoration(
+            labelText: 'Buscar materiales',
+            hintText: 'Nombre, marca o color',
+            prefixIcon: const Icon(Icons.search),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+          onChanged: (value) => setState(() => search = value),
+        ),
+        const SizedBox(height: 16),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: categories.map((category) {
+            final count = category.$1 == 'all'
+                ? widget.items.length
+                : widget.items
+                      .where((i) => categoryKey(i) == category.$1)
+                      .length;
+
+            return ChoiceChip(
+              label: Text('${category.$2} ($count)'),
+              selected: selected == category.$1,
+              selectedColor: const Color(0xFFE1EBDC),
+              onSelected: (_) {
+                setState(() => selected = category.$1);
+              },
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 24),
+        if (filtered.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: Text('No se encontraron materiales.')),
+            ),
+          )
+        else
+          for (final category in visibleCategories) ...[
+            if (filtered.any((i) => categoryKey(i) == category.$1)) ...[
+              Row(
+                children: [
+                  Icon(categoryIcon(category.$1), color: green),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      category.$2,
+                      style: Theme.of(context).textTheme.titleLarge
+                          ?.copyWith(fontWeight: FontWeight.bold, color: green),
+                    ),
+                  ),
+                  Text(
+                    '${filtered.where((i) => categoryKey(i) == category.$1).length} materiales',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              for (final item in filtered.where(
+                (i) => categoryKey(i) == category.$1,
+              ))
+                InventoryItemCard(
+                  item: item,
+                  onAdjust: () => widget.onAdjust(item),
+                  onPurchase: () => widget.onPurchase(item),
+                  onHistory: () => widget.onHistory(item),
+                  onEdit: () => widget.onEdit(item),
+                  onDelete: () => widget.onDelete(item),
+                ),
+              const SizedBox(height: 18),
+            ],
+          ],
+      ],
+    );
+  }
+}

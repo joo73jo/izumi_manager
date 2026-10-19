@@ -1,0 +1,293 @@
+import 'package:drift/drift.dart' show Variable;
+
+import '../../../core/database/app_database.dart';
+import '../../produccion/data/production_repository.dart';
+import '../../produccion/data/production_cost_snapshot_repository.dart';
+import '../../productos/data/product_variants_repository.dart';
+
+class SaleableVariant {
+  const SaleableVariant({
+    required this.id,
+    required this.productName,
+    required this.variantName,
+    required this.priceCents,
+    required this.available,
+  });
+
+  final int id;
+  final String productName;
+  final String variantName;
+  final int priceCents;
+  final int available;
+}
+
+class FinishedStockSaleRepository {
+  FinishedStockSaleRepository(this.db);
+
+  final AppDatabase db;
+
+  Future<void> initialize() async {
+    await ProductVariantsRepository(db).initialize();
+    await ProductionRepository(db).initialize();
+    await ProductionCostSnapshotRepository(db).initialize();
+
+    await db.customStatement('''
+      CREATE TABLE IF NOT EXISTS finished_stock_sales (
+        sale_id INTEGER PRIMARY KEY,
+        variant_id INTEGER NOT NULL REFERENCES product_variants(id),
+        quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0)
+      )
+    ''');
+
+    await db.customStatement('''
+      CREATE TABLE IF NOT EXISTS finished_sale_productions (
+        sale_id INTEGER PRIMARY KEY REFERENCES izumi_sales(id),
+        production_id INTEGER NOT NULL UNIQUE
+          REFERENCES production_orders(id),
+        material_cost_cents INTEGER NOT NULL
+      )
+    ''');
+  }
+
+  Future<List<SaleableVariant>> availableVariants() async {
+    await initialize();
+
+    final rows = await db.customSelect('''
+      SELECT v.id, p.name AS product_name,
+             v.name AS variant_name, v.price_cents,
+             s.quantity
+      FROM finished_stock s
+      JOIN product_variants v ON v.id = s.variant_id
+      JOIN izumi_products p ON p.id = v.product_id
+      WHERE s.quantity > 0 AND v.active = 1 AND p.active = 1
+      ORDER BY p.name COLLATE NOCASE, v.name COLLATE NOCASE
+    ''').get();
+
+    return rows
+        .map(
+          (r) => SaleableVariant(
+            id: r.read<int>('id'),
+            productName: r.read<String>('product_name'),
+            variantName: r.read<String>('variant_name'),
+            priceCents: r.read<int>('price_cents'),
+            available: r.read<int>('quantity'),
+          ),
+        )
+        .toList();
+  }
+
+  Future<int> registerSale({
+    required int variantId,
+    required int revenueCents,
+    required String customerName,
+    required String notes,
+  }) async {
+    if (revenueCents <= 0) {
+      throw ArgumentError('El precio debe ser mayor que cero.');
+    }
+
+    await initialize();
+
+    return db.transaction(() async {
+      final variants = await db
+          .customSelect(
+            '''
+        SELECT p.name AS product_name, v.name AS variant_name
+        FROM product_variants v
+        JOIN izumi_products p ON p.id = v.product_id
+        WHERE v.id = ? AND v.active = 1 AND p.active = 1
+      ''',
+            variables: [Variable.withInt(variantId)],
+          )
+          .get();
+
+      if (variants.isEmpty) {
+        throw StateError('Producto o variante no disponible.');
+      }
+
+      final stockRows = await db
+          .customSelect(
+            '''
+        SELECT quantity FROM finished_stock
+        WHERE variant_id = ?
+      ''',
+            variables: [Variable.withInt(variantId)],
+          )
+          .get();
+
+      if (stockRows.isEmpty || stockRows.first.read<int>('quantity') < 1) {
+        throw StateError('No hay stock terminado suficiente.');
+      }
+
+      // Ventas antiguas realizadas antes de vincular fabricaciones.
+      // Se reservan las fabricaciones mas antiguas para esas ventas.
+      final legacyRows = await db
+          .customSelect(
+            '''
+        SELECT COALESCE(SUM(fs.quantity), 0) AS total
+        FROM finished_stock_sales fs
+        LEFT JOIN finished_sale_productions link
+          ON link.sale_id = fs.sale_id
+        WHERE fs.variant_id = ? AND link.sale_id IS NULL
+      ''',
+            variables: [Variable.withInt(variantId)],
+          )
+          .getSingle();
+
+      final legacySold = legacyRows.read<int>('total');
+
+      final productions = await db
+          .customSelect(
+            '''
+        SELECT po.id, cs.known_cost_cents, cs.missing_prices
+        FROM production_orders po
+        LEFT JOIN finished_sale_productions link
+          ON link.production_id = po.id
+        LEFT JOIN production_cost_snapshots cs
+          ON cs.production_id = po.id
+        WHERE po.variant_id = ?
+          AND link.production_id IS NULL
+        ORDER BY po.id ASC
+      ''',
+            variables: [Variable.withInt(variantId)],
+          )
+          .get();
+
+      if (productions.length <= legacySold) {
+        throw StateError(
+          'No se pudo identificar una fabricacion disponible. '
+          'Revisa el historial de stock.',
+        );
+      }
+
+      final origin = productions[legacySold];
+      final productionId = origin.read<int>('id');
+      final historicalCost = origin.readNullable<int>('known_cost_cents');
+      final missing = origin.readNullable<int>('missing_prices');
+
+      if (historicalCost == null || missing == null || missing > 0) {
+        throw StateError(
+          'La fabricacion #$productionId no tiene un costo '
+          'historico completo. No se puede valorar esta venta.',
+        );
+      }
+
+      final accountRows = await db.customSelect('''
+        SELECT id, code FROM financial_accounts
+        WHERE code IN ('1100', '4100')
+      ''').get();
+
+      final accounts = <String, int>{
+        for (final a in accountRows) a.read<String>('code'): a.read<int>('id'),
+      };
+
+      if (!accounts.containsKey('1100') || !accounts.containsKey('4100')) {
+        throw StateError(
+          'Faltan cuentas Banco o Ventas. Abre Finanzas y Ventas.',
+        );
+      }
+
+      final changed = await db.customUpdate(
+        '''
+        UPDATE finished_stock
+        SET quantity = quantity - 1
+        WHERE variant_id = ? AND quantity >= 1
+      ''',
+        variables: [Variable.withInt(variantId)],
+      );
+
+      if (changed != 1) {
+        throw StateError('Stock insuficiente.');
+      }
+
+      final productName = variants.first.read<String>('product_name');
+      final variantName = variants.first.read<String>('variant_name');
+      final description = '$productName - $variantName';
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      await db.customStatement(
+        '''
+        INSERT INTO journal_entries
+          (occurred_at, description, reference)
+        VALUES (?, ?, ?)
+      ''',
+        [
+          now ~/ 1000,
+          'Venta de maceta: $description',
+          'VENTA-STOCK-$variantId-$now',
+        ],
+      );
+
+      final journalRow = await db
+          .customSelect('SELECT last_insert_rowid() AS id')
+          .getSingle();
+
+      final journalId = journalRow.read<int>('id');
+
+      await db.customStatement(
+        '''
+        INSERT INTO journal_lines
+          (entry_id, account_id, debit_cents, credit_cents)
+        VALUES (?, ?, ?, 0)
+      ''',
+        [journalId, accounts['1100'], revenueCents],
+      );
+
+      await db.customStatement(
+        '''
+        INSERT INTO journal_lines
+          (entry_id, account_id, debit_cents, credit_cents)
+        VALUES (?, ?, 0, ?)
+      ''',
+        [journalId, accounts['4100'], revenueCents],
+      );
+
+      await db.customStatement(
+        '''
+        INSERT INTO izumi_sales
+          (journal_entry_id, occurred_at, description,
+           channel, customer_name, revenue_cents,
+           estimated_cost_cents, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ''',
+        [
+          journalId,
+          now,
+          description,
+          'direct',
+          customerName.trim(),
+          revenueCents,
+          historicalCost,
+          notes.trim(),
+          now,
+        ],
+      );
+
+      final saleRow = await db
+          .customSelect('SELECT last_insert_rowid() AS id')
+          .getSingle();
+
+      final saleId = saleRow.read<int>('id');
+
+      await db.customStatement(
+        '''
+        INSERT INTO finished_stock_sales
+          (sale_id, variant_id, quantity)
+        VALUES (?, ?, 1)
+      ''',
+        [saleId, variantId],
+      );
+
+      await db.customStatement(
+        '''
+        INSERT INTO finished_sale_productions
+          (sale_id, production_id, material_cost_cents)
+        VALUES (?, ?, ?)
+      ''',
+        [saleId, productionId, historicalCost],
+      );
+
+      return saleId;
+    });
+  }
+}

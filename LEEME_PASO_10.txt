@@ -1,0 +1,29 @@
+IZUMI MANAGER - PASO 10 / NUCLEO SQLITE
+
+1. Estas carpetas lib/core/database/ se agregan a D:\izumi_app\lib\core\database\.
+   No reemplaces el resto de la aplicación.
+
+2. Las dependencias que debes tener instaladas son:
+   flutter pub add drift sqlite3_flutter_libs path_provider path
+   flutter pub add --dev drift_dev build_runner
+
+3. En PowerShell, dentro de D:\izumi_app, ejecuta:
+   dart run build_runner build --delete-conflicting-outputs
+   flutter analyze
+   flutter run -d windows
+
+4. No debes escribir a mano app_database.g.dart: Drift lo genera automáticamente.
+
+5. IMPORTANTE: este paso solo prepara el esquema. Todavía NO registra los
+   $2.000 ni crea reportes, y la aplicación no abre la DB hasta que la
+   conectemos al siguiente módulo.
+
+6. El archivo izumi.sqlite se guardará en la carpeta de datos de la aplicación
+   que devuelve Windows a path_provider, NO en el directorio del proyecto.
+
+7. Se usan centavos enteros para manejar dinero. Más adelante implementaremos
+   asientos equilibrados, validación por transacciones, conciliación bancaria,
+   categorías, adjuntos y respaldo consistente de la base de datos.
+
+8. Si aparece un error de 'Target of URI doesn't exist' para app_database.g.dart,
+   ejecuta primero el generador del paso 3.

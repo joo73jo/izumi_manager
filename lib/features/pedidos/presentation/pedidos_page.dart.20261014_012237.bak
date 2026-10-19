@@ -1,0 +1,16 @@
+import 'package:flutter/material.dart';
+
+import '../../../core/widgets/section_placeholder.dart';
+
+class PedidosPage extends StatelessWidget {
+  const PedidosPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const SectionPlaceholder(
+      title: 'Pedidos y ventas',
+      description: 'Pedidos provenientes de la web, WhatsApp, Instagram y ventas directas.',
+      icon: Icons.receipt_long_outlined,
+    );
+  }
+}

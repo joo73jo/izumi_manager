@@ -1,0 +1,12 @@
+import 'package:flutter/material.dart';
+
+import '../../ventas/presentation/ventas_page.dart';
+
+class PedidosPage extends StatelessWidget {
+  const PedidosPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const VentasPage();
+  }
+}

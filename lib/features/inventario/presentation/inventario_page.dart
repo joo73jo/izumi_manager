@@ -1,0 +1,363 @@
+import 'widgets/inventory_edit_dialog.dart';
+import 'widgets/inventory_catalog_view.dart';
+import '../../compras/presentation/purchase_dialog.dart';
+import '../../compras/domain/purchase_line.dart';
+import '../../compras/data/purchase_repository.dart';
+import 'widgets/inventory_history_dialog.dart';
+import '../data/inventory_history_repository.dart';
+import 'widgets/inventory_purchase_dialog.dart';
+import '../data/inventory_purchase_repository.dart';
+
+import 'package:flutter/material.dart';
+
+import '../../../core/database/app_database.dart';
+import '../data/inventory_repository.dart';
+import '../domain/inventory_item.dart';
+
+import 'widgets/inventory_item_dialog.dart';
+
+class InventarioPage extends StatefulWidget {
+  const InventarioPage({super.key});
+
+  @override
+  State<InventarioPage> createState() => _InventarioPageState();
+}
+
+class _InventarioPageState extends State<InventarioPage> {
+  late final AppDatabase database;
+  late final InventoryRepository repository;
+  late Future<List<InventoryItem>> items;
+
+  @override
+  void initState() {
+    super.initState();
+    database = AppDatabase();
+    repository = InventoryRepository(database);
+    items = repository.initialize().then((_) => repository.getAll());
+  }
+
+  @override
+  void dispose() {
+    database.close();
+    super.dispose();
+  }
+
+  void refresh() {
+    final updatedItems = repository.getAll();
+
+    setState(() {
+      items = updatedItems;
+    });
+  }
+
+  Future<void> addItem() async {
+    final input = await showDialog<InventoryItemInput>(
+      context: context,
+      builder: (_) => const InventoryItemDialog(),
+    );
+
+    if (input == null || !mounted) return;
+
+    try {
+      await repository.addItem(
+        name: input.name,
+        category: input.category,
+        unit: input.unit,
+        quantityMillis: input.quantityMillis,
+        minimumMillis: input.minimumMillis,
+      );
+      if (mounted) refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+
+  Future<void> adjust(InventoryItem item) async {
+    final controller = TextEditingController();
+
+    final input = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Ajustar ${item.name}'),
+        content: TextField(
+          controller: controller,
+          decoration: InputDecoration(
+            labelText: 'Variacion en ${item.unit}',
+            hintText: 'Ej. -50 o 100',
+            helperText: 'Negativo para descontar, positivo para agregar',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+
+    controller.dispose();
+
+    if (input == null || !mounted) return;
+
+    final text = input.replaceAll(',', '.');
+    final match = RegExp(r'^([+-]?)(\d+)(?:\.(\d{1,3}))?$').firstMatch(text);
+
+    if (match == null) {
+      showError('Cantidad no valida');
+      return;
+    }
+
+    final whole = int.parse(match.group(2)!);
+    final fraction = int.parse(
+      (match.group(3) ?? '').padRight(3, '0').isEmpty
+          ? '0'
+          : (match.group(3) ?? '').padRight(3, '0'),
+    );
+    final sign = match.group(1) == '-' ? -1 : 1;
+    final delta = sign * (whole * 1000 + fraction);
+
+    try {
+      await repository.adjustStock(
+        itemId: item.id,
+        deltaMillis: delta,
+        reason: 'Ajuste manual',
+      );
+      if (mounted) refresh();
+    } catch (error) {
+      showError('$error');
+    }
+  }
+
+  bool purchasing = false;
+
+  Future<void> purchase(InventoryItem item) async {
+    if (purchasing) return;
+
+    final input = await showDialog<InventoryPurchaseInput>(
+      context: context,
+      builder: (_) => InventoryPurchaseDialog(item: item),
+    );
+
+    if (input == null || !mounted || purchasing) return;
+
+    setState(() => purchasing = true);
+
+    try {
+      final purchases = InventoryPurchaseRepository(database);
+
+      await purchases.registerPurchase(
+        itemId: item.id,
+        quantityMillis: input.quantityMillis,
+        totalCents: input.totalCents,
+      );
+
+      if (!mounted) return;
+
+      refresh();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Compra registrada correctamente.')),
+      );
+    } catch (error) {
+      showError(error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => purchasing = false);
+      }
+    }
+  }
+
+  Future<void> showHistory(InventoryItem item) async {
+    final historyRepository = InventoryHistoryRepository(database);
+
+    await showDialog<void>(
+      context: context,
+      builder: (_) =>
+          InventoryHistoryDialog(item: item, repository: historyRepository),
+    );
+  }
+
+  bool savingPurchase = false;
+
+  Future<void> newPurchase() async {
+    if (savingPurchase) return;
+
+    try {
+      await repository.initialize();
+      final availableItems = await repository.getAll();
+
+      if (!mounted) return;
+
+      final draft = await showDialog<PurchaseDraft>(
+        context: context,
+        builder: (_) => PurchaseDialog(items: availableItems),
+      );
+
+      if (draft == null || !mounted || savingPurchase) return;
+
+      setState(() => savingPurchase = true);
+
+      try {
+        final purchases = PurchaseRepository(database);
+        await purchases.register(draft);
+
+        if (!mounted) return;
+
+        refresh();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Compra registrada correctamente.')),
+        );
+      } finally {
+        if (mounted) {
+          setState(() => savingPurchase = false);
+        }
+      }
+    } catch (error) {
+      showError(error.toString());
+    }
+  }
+
+  Future<void> editMaterial(InventoryItem item) async {
+    final input = await showDialog<InventoryEditInput>(
+      context: context,
+      builder: (_) => InventoryEditDialog(item: item),
+    );
+
+    if (input == null || !mounted) return;
+
+    try {
+      await repository.updateItemDetails(
+        id: item.id,
+        name: input.name,
+        category: input.category,
+        minimumMillis: input.minimumMillis,
+      );
+
+      if (mounted) refresh();
+    } catch (error) {
+      showError(error.toString());
+    }
+  }
+
+  Future<void> deleteMaterial(InventoryItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Eliminar material'),
+        content: Text(
+          'Se eliminara "${item.name}" definitivamente.\n\n'
+          'Solo es posible si no tiene compras, fabricaciones '
+          'ni otros movimientos asociados.\n\n'
+          'Esta accion no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await repository.deleteIfUnused(item.id);
+
+      if (mounted) {
+        refresh();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Material eliminado correctamente.')),
+        );
+      }
+    } catch (error) {
+      showError(error.toString());
+    }
+  }
+
+  void showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<InventoryItem>>(
+      future: items,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: SelectableText('${snapshot.error}'));
+        }
+
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final data = snapshot.data!;
+
+        return ListView(
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Inventario',
+                    style: TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF284426),
+                    ),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: newPurchase,
+                  icon: const Icon(Icons.shopping_cart_outlined),
+                  label: const Text('Nueva compra'),
+                ),
+                const SizedBox(width: 12),
+                FilledButton.icon(
+                  onPressed: addItem,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Agregar material'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text('Control de plantas, filamentos e insumos.'),
+            const SizedBox(height: 22),
+            if (data.isEmpty)
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('Todavia no hay materiales registrados.'),
+                ),
+              )
+            else
+              InventoryCatalogView(
+                items: data,
+                onAdjust: adjust,
+                onPurchase: purchase,
+                onHistory: showHistory,
+                onEdit: editMaterial,
+                onDelete: deleteMaterial,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}

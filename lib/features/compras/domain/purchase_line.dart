@@ -1,0 +1,42 @@
+import '../../inventario/domain/inventory_category.dart';
+
+class PurchaseLine {
+  const PurchaseLine({
+    required this.name,
+    required this.category,
+    required this.unit,
+    required this.quantityMillis,
+    required this.totalCents,
+    this.inventoryItemId,
+  });
+
+  final int? inventoryItemId;
+  final String name;
+  final InventoryCategory category;
+  final String unit;
+  final int quantityMillis;
+  final int totalCents;
+
+  bool get isNew => inventoryItemId == null;
+}
+
+class PurchaseDraft {
+  const PurchaseDraft({
+    required this.date,
+    required this.description,
+    required this.lines,
+    this.supplier = '',
+    this.invoiceNumber = '',
+    this.notes = '',
+  });
+
+  final DateTime date;
+  final String description;
+  final List<PurchaseLine> lines;
+  final String supplier;
+  final String invoiceNumber;
+  final String notes;
+
+  int get totalCents =>
+      lines.fold<int>(0, (total, line) => total + line.totalCents);
+}
