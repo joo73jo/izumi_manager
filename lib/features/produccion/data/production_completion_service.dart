@@ -13,6 +13,11 @@ class ProductionCompletionService {
   final AppDatabase db;
 
   Future<int> complete(ProductionDraft draft) async {
+    final isTestProduction = RegExp(
+      r'^prueba\b',
+      caseSensitive: false,
+    ).hasMatch(draft.notes.trim());
+
     if (draft.materials.isEmpty) {
       throw StateError('Agrega al menos un material.');
     }
@@ -134,20 +139,24 @@ class ProductionCompletionService {
         );
       }
 
-      await db.customStatement(
-        '''
-        INSERT INTO finished_stock (variant_id, quantity)
-        VALUES (?, 1)
-        ON CONFLICT(variant_id)
-        DO UPDATE SET quantity = quantity + 1
-      ''',
-        [draft.variantId],
-      );
+      if (!isTestProduction) {
+        await db.customStatement(
+          '''
+          INSERT INTO finished_stock (variant_id, quantity)
+          VALUES (?, 1)
+          ON CONFLICT(variant_id)
+          DO UPDATE SET quantity = quantity + 1
+        ''',
+          [draft.variantId],
+        );
+      }
 
       await ProductionCostSnapshotRepository(db).capture(productionId);
 
-      await ProductionAccountingService(db)
-          .transferMaterialsToFinishedGoods(productionId);
+      if (!isTestProduction) {
+        await ProductionAccountingService(db)
+            .transferMaterialsToFinishedGoods(productionId);
+      }
 
       return productionId;
     });
