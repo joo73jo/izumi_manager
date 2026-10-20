@@ -152,9 +152,16 @@ class _ProductosPageState extends State<ProductosPage> {
                   ? const Center(child: Text('No hay productos para mostrar.'))
                   : LayoutBuilder(
                       builder: (context, constraints) {
-                        final columns = (constraints.maxWidth / 240)
-                            .floor()
-                            .clamp(1, 5);
+                        // Reservar espacio suficiente para los botones
+                        // y considerar la separacion entre tarjetas.
+                        const minCardWidth = 320.0;
+                        const cardSpacing = 12.0;
+
+                        final columns =
+                            ((constraints.maxWidth + cardSpacing) /
+                                    (minCardWidth + cardSpacing))
+                                .floor()
+                                .clamp(1, 5);
 
                         return GridView.builder(
                           gridDelegate:
