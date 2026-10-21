@@ -1,3 +1,7 @@
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
+
 import 'product_variants_dialog.dart';
 import 'product_materials_dialog.dart';
 import '../../data/product_folder_service.dart';
@@ -28,20 +32,7 @@ class ProductCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              height: 110,
-              width: double.infinity,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE9EFE8),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.local_florist_outlined,
-                color: Color(0xFF284426),
-                size: 40,
-              ),
-            ),
+            _ProductPhoto(productId: product.id, productName: product.name),
             const SizedBox(height: 14),
             Text(
               product.name,
@@ -119,6 +110,77 @@ class ProductCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ProductPhoto extends StatelessWidget {
+  const _ProductPhoto({required this.productId, required this.productName});
+
+  final int productId;
+  final String productName;
+
+  Future<File?> _findPhoto() async {
+    final folder = await ProductFolderService().getFolder(
+      productId,
+      productName,
+    );
+
+    final photos = Directory(p.join(folder.path, 'Fotografias'));
+
+    if (!await photos.exists()) return null;
+
+    final files = await photos
+        .list()
+        .where((entity) => entity is File)
+        .cast<File>()
+        .where((file) {
+          final extension = p.extension(file.path).toLowerCase();
+          return ['.jpg', '.jpeg', '.png', '.webp'].contains(extension);
+        })
+        .toList();
+
+    if (files.isEmpty) return null;
+
+    files.sort(
+      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+    );
+
+    return files.first;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<File?>(
+      future: _findPhoto(),
+      builder: (context, snapshot) {
+        return Container(
+          height: 110,
+          width: double.infinity,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE9EFE8),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: snapshot.hasData && snapshot.data != null
+              ? Image.file(
+                  snapshot.data!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => _placeholder(),
+                )
+              : _placeholder(),
+        );
+      },
+    );
+  }
+
+  Widget _placeholder() {
+    return const Center(
+      child: Icon(
+        Icons.local_florist_outlined,
+        color: Color(0xFF284426),
+        size: 40,
       ),
     );
   }

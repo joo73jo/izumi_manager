@@ -20,6 +20,15 @@ class _ProductionDialogState extends State<ProductionDialog> {
   final quantityController = TextEditingController();
   final wasteController = TextEditingController(text: '0');
   final notesController = TextEditingController();
+  final materialSearchController = TextEditingController();
+
+  List<(int, String, String, int)> get filteredInventory {
+    final search = materialSearchController.text.trim().toLowerCase();
+
+    return inventory.where((item) {
+      return item.$2.toLowerCase().contains(search);
+    }).toList();
+  }
 
   List<(int, String)> products = [];
   List<(int, String)> variants = [];
@@ -29,6 +38,7 @@ class _ProductionDialogState extends State<ProductionDialog> {
   int? productId;
   int? variantId;
   int? materialId;
+  bool showMaterialResults = false;
 
   bool loading = true;
   bool saving = false;
@@ -46,6 +56,7 @@ class _ProductionDialogState extends State<ProductionDialog> {
     quantityController.dispose();
     wasteController.dispose();
     notesController.dispose();
+    materialSearchController.dispose();
     db.close();
     super.dispose();
   }
@@ -63,6 +74,25 @@ class _ProductionDialogState extends State<ProductionDialog> {
       final inventoryRows = await db.customSelect('''
         SELECT id, name, unit, quantity_millis
         FROM inventory_items
+        WHERE quantity_millis > 0
+          AND category IN (
+            'filament',
+            'plant',
+            'substrate',
+            'packaging'
+          )
+          AND LOWER(category) NOT LIKE '%equipo%'
+          AND LOWER(category) NOT LIKE '%herramient%'
+          AND LOWER(category) NOT LIKE '%maquinaria%'
+          AND LOWER(category) NOT LIKE '%activo%'
+          AND LOWER(category) NOT LIKE '%equipment%'
+          AND LOWER(category) NOT LIKE '%tool%'
+          AND LOWER(category) NOT LIKE '%machine%'
+          AND LOWER(name) NOT LIKE 'impresora %'
+          AND LOWER(name) NOT LIKE 'secador %'
+          AND LOWER(name) NOT LIKE 'regulador %'
+          AND LOWER(name) NOT LIKE 'cortadora %'
+          AND LOWER(name) NOT LIKE 'calibrador %'
         ORDER BY name COLLATE NOCASE
       ''').get();
 
@@ -80,7 +110,7 @@ class _ProductionDialogState extends State<ProductionDialog> {
       }).toList();
 
       productId = products.isEmpty ? null : products.first.$1;
-      materialId = inventory.isEmpty ? null : inventory.first.$1;
+      materialId = null;
 
       await loadVariants();
 
@@ -100,6 +130,36 @@ class _ProductionDialogState extends State<ProductionDialog> {
       variants = [];
       variantId = null;
       return;
+    }
+
+    final existing = await db
+        .customSelect(
+          '''
+      SELECT id FROM product_variants
+      WHERE product_id = ? AND active = 1
+      LIMIT 1
+      ''',
+          variables: [Variable.withInt(productId!)],
+        )
+        .get();
+
+    if (existing.isEmpty) {
+      await db.customStatement(
+        '''
+        INSERT INTO product_variants
+          (product_id, name, price_cents, active)
+        VALUES (
+          ?,
+          'General',
+          (SELECT price_cents
+           FROM izumi_products WHERE id = ?),
+          1
+        )
+        ON CONFLICT(product_id, name)
+        DO UPDATE SET active = 1
+        ''',
+        [productId!, productId!],
+      );
     }
 
     final rows = await db
@@ -319,12 +379,7 @@ class _ProductionDialogState extends State<ProductionDialog> {
                               },
                       ),
                     const SizedBox(height: 12),
-                    if (variants.isEmpty)
-                      const Text(
-                        'Este producto no tiene variantes activas. '
-                        'Agr\u00e9galas desde Productos.',
-                      )
-                    else
+                    if (variants.length > 1)
                       DropdownButtonFormField<int>(
                         key: ValueKey('variant-$productId-$variantId'),
                         initialValue: variantId,
@@ -352,27 +407,100 @@ class _ProductionDialogState extends State<ProductionDialog> {
                     if (inventory.isEmpty)
                       const Text('Primero registra insumos en Inventario.')
                     else ...[
-                      DropdownButtonFormField<int>(
-                        key: ValueKey('material-$materialId'),
-                        initialValue: materialId,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'Material',
-                          border: OutlineInputBorder(),
+                      TextField(
+                        controller: materialSearchController,
+                        decoration: InputDecoration(
+                          labelText: 'Buscar material',
+                          hintText: 'Ej. PLA, PETG, madera...',
+                          prefixIcon: const Icon(Icons.search),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: IconButton(
+                            tooltip: 'Limpiar',
+                            icon: const Icon(Icons.clear),
+                            onPressed: saving
+                                ? null
+                                : () {
+                                    materialSearchController.clear();
+                                    setState(() {
+                                      materialId = null;
+                                      showMaterialResults = true;
+                                    });
+                                  },
+                          ),
                         ),
-                        items: inventory.map((i) {
-                          return DropdownMenuItem(
-                            value: i.$1,
-                            child: Text(
-                              '${i.$2} (${i.$3})',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: saving
-                            ? null
-                            : (id) => setState(() => materialId = id),
+                        onTap: () {
+                          if (!saving) {
+                            setState(() => showMaterialResults = true);
+                          }
+                        },
+                        onChanged: (_) {
+                          setState(() {
+                            materialId = null;
+                            showMaterialResults = true;
+                          });
+                        },
                       ),
+                      if (materialId != null && !showMaterialResults)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            'Seleccionado: ${materialName(materialId!)}',
+                            style: const TextStyle(
+                              color: Color(0xFF284426),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      if (showMaterialResults) ...[
+                        const SizedBox(height: 6),
+                        Container(
+                          constraints: const BoxConstraints(maxHeight: 210),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: const Color(0xFFD1D9D0)),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: filteredInventory.isEmpty
+                              ? const Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: Text('No se encontraron materiales.'),
+                                )
+                              : ListView.builder(
+                                  shrinkWrap: true,
+                                  itemCount: filteredInventory.length,
+                                  itemBuilder: (context, index) {
+                                    final item = filteredInventory[index];
+                                    final unit = item.$3 == 'unidad'
+                                        ? (item.$4 == 1000
+                                              ? 'unidad'
+                                              : 'unidades')
+                                        : item.$3;
+                                    return ListTile(
+                                      dense: true,
+                                      title: Text(item.$2),
+                                      subtitle: Text(
+                                        'Stock: ${number(item.$4)} $unit',
+                                      ),
+                                      trailing: const Icon(
+                                        Icons.chevron_right,
+                                        size: 18,
+                                      ),
+                                      onTap: saving
+                                          ? null
+                                          : () {
+                                              materialSearchController.text =
+                                                  item.$2;
+                                              FocusScope.of(context).unfocus();
+                                              setState(() {
+                                                materialId = item.$1;
+                                                showMaterialResults = false;
+                                              });
+                                            },
+                                    );
+                                  },
+                                ),
+                        ),
+                      ],
+                      const SizedBox(height: 10),
                       const SizedBox(height: 10),
                       Row(
                         children: [
