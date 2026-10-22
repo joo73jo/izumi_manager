@@ -1,3 +1,4 @@
+import 'widgets/sales_finance_breakdown.dart';
 import 'widgets/quarterly_report_dialog.dart';
 import 'widgets/capital_overview_card.dart';
 import '../data/capital_overview_repository.dart';
@@ -299,6 +300,8 @@ class _FinanzasPageState extends State<FinanzasPage> {
             const SizedBox(height: 24),
 
             buildMetricSection(data),
+
+            const SalesFinanceBreakdown(),
 
             const SizedBox(height: 12),
 
