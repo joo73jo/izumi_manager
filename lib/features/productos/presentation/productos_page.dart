@@ -45,7 +45,9 @@ class _ProductosPageState extends State<ProductosPage> {
   }
 
   void refresh() {
-    setState(() => products = repository.getAll());
+    setState(() {
+      products = repository.getAll();
+    });
 
     repository.getAll().then((items) async {
       final folders = ProductFolderService();

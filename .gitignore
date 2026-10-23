@@ -60,3 +60,20 @@ app.*.map.json
 *.bak_*
 Izumi_Datos/
 build/
+# Izumi - archivos privados
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-journal
+*credentials.json
+*.env
+.env.*
+!*.env.example
+**/credentials/
+**/secrets/
+**/vault.ps1
+*.pfx
+*.pem
+*.key
+*.bak_*

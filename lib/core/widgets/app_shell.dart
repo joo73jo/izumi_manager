@@ -1,3 +1,4 @@
+import '../../features/izumi_studio/presentation/izumi_studio_page.dart';
 import '../../features/tareas/presentation/tareas_page.dart';
 
 import 'package:flutter/material.dart';
@@ -29,6 +30,7 @@ class _AppShellState extends State<AppShell> {
     AppSection.pedidos => const PedidosPage(),
     AppSection.calculadora => const CalculadoraPage(),
     AppSection.tareas => const TareasPage(),
+    AppSection.izumiStudio => const IzumiStudioPage(),
   };
 
   @override

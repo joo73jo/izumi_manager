@@ -8,7 +8,8 @@ enum AppSection {
   produccion('Producción', Icons.precision_manufacturing_outlined),
   pedidos('Pedidos y ventas', Icons.receipt_long_outlined),
   calculadora('Calculadora', Icons.calculate_outlined),
-  tareas('Tareas', Icons.task_alt_outlined);
+  tareas('Tareas', Icons.task_alt_outlined),
+  izumiStudio('Izumi Studio', Icons.auto_awesome_outlined);
 
   const AppSection(this.label, this.icon);
   final String label;
