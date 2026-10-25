@@ -1,3 +1,4 @@
+import '../../izumi_studio/presentation/collections_page.dart';
 import '../data/product_folder_service.dart';
 
 import 'package:flutter/material.dart';
@@ -21,6 +22,7 @@ class _ProductosPageState extends State<ProductosPage> {
   late Future<List<IzumiProduct>> products;
 
   bool showInactive = false;
+  bool showCollections = false;
 
   @override
   void initState() {
@@ -98,6 +100,21 @@ class _ProductosPageState extends State<ProductosPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (showCollections) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextButton.icon(
+            onPressed: () => setState(() => showCollections = false),
+            icon: const Icon(Icons.arrow_back),
+            label: const Text('Volver a Productos'),
+          ),
+          const SizedBox(height: 15),
+          const Expanded(child: CollectionsPage()),
+        ],
+      );
+    }
+
     return FutureBuilder<List<IzumiProduct>>(
       future: products,
       builder: (context, snapshot) {
@@ -129,6 +146,12 @@ class _ProductosPageState extends State<ProductosPage> {
                     ),
                   ),
                 ),
+                OutlinedButton.icon(
+                  onPressed: () => setState(() => showCollections = true),
+                  icon: const Icon(Icons.layers_outlined),
+                  label: const Text('Colecciones'),
+                ),
+                const SizedBox(width: 12),
                 FilledButton.icon(
                   onPressed: () => saveProduct(),
                   icon: const Icon(Icons.add),
