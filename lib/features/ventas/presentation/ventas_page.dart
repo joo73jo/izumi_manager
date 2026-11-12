@@ -34,7 +34,13 @@ class _VentasPageState extends State<VentasPage> {
   }
 
   void refresh() {
-    setState(() => sales = repository.getAll());
+    final updatedSales = repository.getAll();
+
+    if (!mounted) return;
+
+    setState(() {
+      sales = updatedSales;
+    });
   }
 
   String money(int cents) {
