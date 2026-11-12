@@ -17,9 +17,25 @@ class InventoryRepository {
         category TEXT NOT NULL,
         unit TEXT NOT NULL,
         quantity_millis INTEGER NOT NULL DEFAULT 0,
-        minimum_millis INTEGER NOT NULL DEFAULT 0
+        minimum_millis INTEGER NOT NULL DEFAULT 0,
+        reference_cost_cents_per_kg INTEGER
       )
     ''');
+
+    final columns = await db
+        .customSelect('PRAGMA table_info(inventory_items)')
+        .get();
+
+    final hasCost = columns.any(
+      (column) => column.read<String>('name') == 'reference_cost_cents_per_kg',
+    );
+
+    if (!hasCost) {
+      await db.customStatement(
+        'ALTER TABLE inventory_items '
+        'ADD COLUMN reference_cost_cents_per_kg INTEGER',
+      );
+    }
 
     await db.customStatement('''
       CREATE TABLE IF NOT EXISTS inventory_stock_movements (
@@ -33,6 +49,7 @@ class InventoryRepository {
   }
 
   Future<List<InventoryItem>> getAll() async {
+    await initialize();
     final rows = await db
         .customSelect('SELECT * FROM inventory_items ORDER BY category, name')
         .get();
@@ -45,6 +62,9 @@ class InventoryRepository {
         unit: row.read<String>('unit'),
         quantityMillis: row.read<int>('quantity_millis'),
         minimumMillis: row.read<int>('minimum_millis'),
+        referenceCostCentsPerKg: row.readNullable<int>(
+          'reference_cost_cents_per_kg',
+        ),
       );
     }).toList();
   }
@@ -160,7 +180,15 @@ class InventoryRepository {
     required String name,
     required InventoryCategory category,
     required int minimumMillis,
+    required int? referenceCostCentsPerKg,
   }) async {
+    if (referenceCostCentsPerKg != null && referenceCostCentsPerKg <= 0) {
+      throw ArgumentError('El costo debe ser mayor que cero.');
+    }
+
+    if (category != InventoryCategory.filament) {
+      referenceCostCentsPerKg = null;
+    }
     if (name.trim().isEmpty || minimumMillis < 0) {
       throw ArgumentError('Nombre o stock minimo invalido.');
     }
@@ -198,10 +226,18 @@ class InventoryRepository {
       await db.customStatement(
         '''
         UPDATE inventory_items
-        SET name = ?, category = ?, unit = ?, minimum_millis = ?
+        SET name = ?, category = ?, unit = ?, minimum_millis = ?,
+            reference_cost_cents_per_kg = ?
         WHERE id = ?
       ''',
-        [name.trim(), category.name, newUnit, minimumMillis, id],
+        [
+          name.trim(),
+          category.name,
+          newUnit,
+          minimumMillis,
+          referenceCostCentsPerKg,
+          id,
+        ],
       );
     });
   }

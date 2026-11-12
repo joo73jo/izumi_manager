@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart' show Variable;
 
 import '../../../core/database/app_database.dart';
+import '../../inventario/data/inventory_repository.dart';
 
 class ProductionMaterialCost {
   const ProductionMaterialCost({
@@ -44,6 +45,8 @@ class ProductionCostRepository {
   final AppDatabase db;
 
   Future<ProductionCostReport> forProduction(int productionId) async {
+    await InventoryRepository(db).initialize();
+
     final tableExists = await db.customSelect('''
       SELECT name
       FROM sqlite_master
@@ -81,6 +84,7 @@ class ProductionCostRepository {
       SELECT
         COALESCE(i.name, 'Material eliminado') AS material_name,
         COALESCE(i.unit, '') AS unit,
+        i.reference_cost_cents_per_kg,
         pc.quantity_millis,
         pc.waste_percent,
         pc.consumed_millis,
@@ -112,6 +116,18 @@ class ProductionCostRepository {
         cost =
             (consumedMillis * purchasedCents + purchasedMillis ~/ 2) ~/
             purchasedMillis;
+      }
+
+      if (cost == null) {
+        final referenceCost = row.readNullable<int>(
+          'reference_cost_cents_per_kg',
+        );
+
+        if (row.read<String>('unit') == 'g' &&
+            referenceCost != null &&
+            referenceCost > 0) {
+          cost = (consumedMillis * referenceCost + 500000) ~/ 1000000;
+        }
       }
 
       materials.add(

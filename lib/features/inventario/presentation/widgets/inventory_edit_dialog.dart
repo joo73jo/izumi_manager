@@ -8,11 +8,13 @@ class InventoryEditInput {
     required this.name,
     required this.category,
     required this.minimumMillis,
+    required this.referenceCostCentsPerKg,
   });
 
   final String name;
   final InventoryCategory category;
   final int minimumMillis;
+  final int? referenceCostCentsPerKg;
 }
 
 class InventoryEditDialog extends StatefulWidget {
@@ -27,6 +29,7 @@ class InventoryEditDialog extends StatefulWidget {
 class _InventoryEditDialogState extends State<InventoryEditDialog> {
   late final TextEditingController name;
   late final TextEditingController minimum;
+  late final TextEditingController referenceCost;
   late InventoryCategory category;
 
   @override
@@ -40,12 +43,19 @@ class _InventoryEditDialogState extends State<InventoryEditDialog> {
           .replaceFirst(RegExp(r'\.$'), ''),
     );
     category = widget.item.category;
+
+    referenceCost = TextEditingController(
+      text: widget.item.referenceCostCentsPerKg == null
+          ? ''
+          : (widget.item.referenceCostCentsPerKg! / 100).toStringAsFixed(2),
+    );
   }
 
   @override
   void dispose() {
     name.dispose();
     minimum.dispose();
+    referenceCost.dispose();
     super.dispose();
   }
 
@@ -65,6 +75,22 @@ class _InventoryEditDialogState extends State<InventoryEditDialog> {
     return whole * 1000 + part;
   }
 
+  int? parseCostCents(String input) {
+    final text = input.trim().replaceAll(',', '.');
+
+    final match = RegExp(r'^(\d+)(?:\.(\d{1,2}))?$').firstMatch(text);
+
+    if (match == null) return null;
+
+    final dollars = int.tryParse(match.group(1)!);
+    if (dollars == null) return null;
+
+    final fraction = (match.group(2) ?? '').padRight(2, '0');
+    final cents = fraction.isEmpty ? 0 : int.parse(fraction);
+
+    return dollars * 100 + cents;
+  }
+
   void save() {
     final parsed = parseMillis(minimum.text);
 
@@ -75,12 +101,27 @@ class _InventoryEditDialogState extends State<InventoryEditDialog> {
       return;
     }
 
+    int? costCents;
+
+    if (category == InventoryCategory.filament &&
+        referenceCost.text.trim().isNotEmpty) {
+      costCents = parseCostCents(referenceCost.text);
+
+      if (costCents == null || costCents <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ingresa un costo por kg válido.')),
+        );
+        return;
+      }
+    }
+
     Navigator.pop(
       context,
       InventoryEditInput(
         name: name.text.trim(),
         category: category,
         minimumMillis: parsed,
+        referenceCostCentsPerKg: costCents,
       ),
     );
   }
@@ -127,6 +168,21 @@ class _InventoryEditDialogState extends State<InventoryEditDialog> {
               ),
             ),
             const SizedBox(height: 12),
+            if (category == InventoryCategory.filament) ...[
+              TextField(
+                controller: referenceCost,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Costo aproximado por kg (USD)',
+                  hintText: 'Ej. 20.00',
+                  helperText: 'Referencia únicamente. No registra compras.',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             const Text(
               'La cantidad actual se cambia desde Ajustar existencias.',
               style: TextStyle(fontSize: 12),

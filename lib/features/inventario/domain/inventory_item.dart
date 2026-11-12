@@ -8,6 +8,7 @@ class InventoryItem {
     required this.unit,
     required this.quantityMillis,
     required this.minimumMillis,
+    this.referenceCostCentsPerKg,
   });
 
   final int id;
@@ -18,6 +19,8 @@ class InventoryItem {
   // 1000 unidades internas equivalen a una unidad visible.
   final int quantityMillis;
   final int minimumMillis;
+
+  final int? referenceCostCentsPerKg;
 
   double get quantity => quantityMillis / 1000;
   double get minimum => minimumMillis / 1000;

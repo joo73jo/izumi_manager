@@ -240,6 +240,7 @@ class _InventarioPageState extends State<InventarioPage> {
         name: input.name,
         category: input.category,
         minimumMillis: input.minimumMillis,
+        referenceCostCentsPerKg: input.referenceCostCentsPerKg,
       );
 
       if (mounted) refresh();
