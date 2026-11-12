@@ -208,21 +208,10 @@ class InventoryRepository {
         throw StateError('El material ya no existe.');
       }
 
-      final oldUnit = rows.first.read<String>('unit');
-      final stock = rows.first.read<int>('quantity_millis');
       final newUnit = category.defaultUnit;
 
-      // No convertir gramos a unidades ni viceversa.
-      if (oldUnit != newUnit) {
-        if (stock != 0 || await _hasExternalMovement(id)) {
-          throw StateError(
-            'No se puede cambiar la unidad de un material '
-            'con existencias o movimientos. '
-            'Corrige primero las existencias.',
-          );
-        }
-      }
-
+      // Permitir corregir la categoria y la unidad del material.
+      // Se conserva la cantidad numerica y el historial existente.
       await db.customStatement(
         '''
         UPDATE inventory_items
